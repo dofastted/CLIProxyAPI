@@ -155,6 +155,13 @@ codex:
   # Some superstitious users believe request tracking identifiers can be used
   # as evidence for TOS enforcement bans; this option only satisfies those odd concerns.
   identity-confuse: false
+  # Optional Codex OAuth proxy routing by account plan_type.
+  # Explicit auth-file proxy_url still wins; then these group proxies; then global proxy-url.
+  # Use socks5h:// when the proxy should resolve upstream domains.
+  # plan-proxy:
+  #   free: "socks5h://127.0.0.1:10810"
+  #   plus-team: "socks5h://127.0.0.1:10811" # plus, team, business, go
+  #   pro: "socks5h://127.0.0.1:10812"
 
 # When true, enable authentication for the WebSocket API (/v1/ws).
 ws-auth: true

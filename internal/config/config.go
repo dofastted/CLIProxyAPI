@@ -261,7 +261,43 @@ type CodexHeaderDefaults struct {
 
 // CodexConfig configures provider-wide Codex request behavior.
 type CodexConfig struct {
-	IdentityConfuse bool `yaml:"identity-confuse" json:"identity-confuse"`
+	IdentityConfuse bool                 `yaml:"identity-confuse" json:"identity-confuse"`
+	PlanProxy       CodexPlanProxyConfig `yaml:"plan-proxy,omitempty" json:"plan-proxy,omitempty"`
+}
+
+// CodexPlanProxyConfig maps Codex OAuth plan groups to proxy URLs.
+type CodexPlanProxyConfig struct {
+	Free     string `yaml:"free,omitempty" json:"free,omitempty"`
+	PlusTeam string `yaml:"plus-team,omitempty" json:"plus-team,omitempty"`
+	Pro      string `yaml:"pro,omitempty" json:"pro,omitempty"`
+}
+
+// ProxyURLForPlanType returns the configured proxy URL for a Codex OAuth plan type.
+func (p CodexPlanProxyConfig) ProxyURLForPlanType(planType string) string {
+	switch CodexPlanProxyGroup(planType) {
+	case "free":
+		return strings.TrimSpace(p.Free)
+	case "plus-team":
+		return strings.TrimSpace(p.PlusTeam)
+	case "pro":
+		return strings.TrimSpace(p.Pro)
+	default:
+		return ""
+	}
+}
+
+// CodexPlanProxyGroup normalizes Codex OAuth plan types into routing groups.
+func CodexPlanProxyGroup(planType string) string {
+	switch strings.ToLower(strings.TrimSpace(planType)) {
+	case "free":
+		return "free"
+	case "plus", "team", "business", "go":
+		return "plus-team"
+	case "pro":
+		return "pro"
+	default:
+		return ""
+	}
 }
 
 // TLSConfig holds HTTPS server settings.
@@ -822,6 +858,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Sanitize Codex keys: drop entries without base-url
 	cfg.SanitizeCodexKeys()
 
+	// Sanitize Codex provider config.
+	cfg.SanitizeCodexConfig()
+
 	// Sanitize Codex header defaults.
 	cfg.SanitizeCodexHeaderDefaults()
 
@@ -929,6 +968,16 @@ func payloadRawString(value any) ([]byte, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// SanitizeCodexConfig trims provider-wide Codex settings.
+func (cfg *Config) SanitizeCodexConfig() {
+	if cfg == nil {
+		return
+	}
+	cfg.Codex.PlanProxy.Free = strings.TrimSpace(cfg.Codex.PlanProxy.Free)
+	cfg.Codex.PlanProxy.PlusTeam = strings.TrimSpace(cfg.Codex.PlanProxy.PlusTeam)
+	cfg.Codex.PlanProxy.Pro = strings.TrimSpace(cfg.Codex.PlanProxy.Pro)
 }
 
 // SanitizeCodexHeaderDefaults trims surrounding whitespace from the

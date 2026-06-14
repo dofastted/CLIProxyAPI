@@ -33,6 +33,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const codexPlanProxyDerivedAttribute = "codex_plan_proxy"
+
 // Service wraps the proxy server lifecycle so external programs can embed the CLI proxy.
 // It manages the complete lifecycle including authentication, file watching, HTTP server,
 // and integration with various AI service providers.
@@ -676,6 +678,7 @@ func (s *Service) prepareCoreAuthForModelRegistration(ctx context.Context, auth 
 		return nil
 	}
 	auth = auth.Clone()
+	s.applyCodexPlanProxy(auth)
 	s.ensureExecutorsForAuth(auth)
 
 	// IMPORTANT: Update coreManager FIRST, before model registration.
@@ -721,6 +724,102 @@ func (s *Service) completeModelRegistrationForAuth(ctx context.Context, auth *co
 	// have an empty supportedModelSet (because Register/Update upserts into the
 	// scheduler before registerModelsForAuth runs) and are invisible to the scheduler.
 	s.coreManager.RefreshSchedulerEntry(auth.ID)
+}
+
+func (s *Service) refreshCodexPlanProxyAuths(ctx context.Context) {
+	if s == nil || s.coreManager == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, auth := range s.coreManager.List() {
+		if auth == nil {
+			continue
+		}
+		candidate := auth.Clone()
+		if !s.applyCodexPlanProxy(candidate) {
+			continue
+		}
+		if _, errUpdate := s.coreManager.Update(ctx, candidate); errUpdate != nil {
+			log.Errorf("failed to update codex plan proxy for auth %s: %v", candidate.ID, errUpdate)
+		}
+	}
+}
+
+func (s *Service) applyCodexPlanProxy(auth *coreauth.Auth) bool {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return false
+	}
+	if codexAuthHasExplicitProxy(auth) {
+		return clearCodexPlanProxyMarker(auth)
+	}
+	proxyURL := strings.TrimSpace(s.codexPlanProxyURL(auth))
+	if proxyURL == "" {
+		if !codexPlanProxyWasDerived(auth) {
+			return false
+		}
+		changed := auth.ProxyURL != ""
+		auth.ProxyURL = ""
+		return clearCodexPlanProxyMarker(auth) || changed
+	}
+	if auth.ProxyURL != "" && !codexPlanProxyWasDerived(auth) {
+		return false
+	}
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	changed := auth.ProxyURL != proxyURL || auth.Attributes[codexPlanProxyDerivedAttribute] != "true"
+	auth.ProxyURL = proxyURL
+	auth.Attributes[codexPlanProxyDerivedAttribute] = "true"
+	return changed
+}
+
+func (s *Service) codexPlanProxyURL(auth *coreauth.Auth) string {
+	if s == nil || auth == nil || auth.Attributes == nil {
+		return ""
+	}
+	planType := strings.TrimSpace(auth.Attributes["plan_type"])
+	if planType == "" {
+		return ""
+	}
+	s.cfgMu.RLock()
+	cfg := s.cfg
+	s.cfgMu.RUnlock()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Codex.PlanProxy.ProxyURLForPlanType(planType)
+}
+
+func codexAuthHasExplicitProxy(auth *coreauth.Auth) bool {
+	if auth == nil {
+		return false
+	}
+	if auth.Metadata != nil {
+		if rawProxy, ok := auth.Metadata["proxy_url"].(string); ok && strings.TrimSpace(rawProxy) != "" {
+			return true
+		}
+	}
+	return strings.TrimSpace(auth.ProxyURL) != "" && !codexPlanProxyWasDerived(auth)
+}
+
+func codexPlanProxyWasDerived(auth *coreauth.Auth) bool {
+	if auth == nil || auth.Attributes == nil {
+		return false
+	}
+	return auth.Attributes[codexPlanProxyDerivedAttribute] == "true"
+}
+
+func clearCodexPlanProxyMarker(auth *coreauth.Auth) bool {
+	if auth == nil || auth.Attributes == nil {
+		return false
+	}
+	if _, ok := auth.Attributes[codexPlanProxyDerivedAttribute]; !ok {
+		return false
+	}
+	delete(auth.Attributes, codexPlanProxyDerivedAttribute)
+	return true
 }
 
 func (s *Service) applyCoreAuthRemoval(ctx context.Context, id string) {
@@ -1187,6 +1286,8 @@ func (s *Service) applyConfigUpdate(newCfg *config.Config) {
 		s.coreManager.SetConfig(newCfg)
 		s.coreManager.SetOAuthModelAlias(newCfg.OAuthModelAlias)
 	}
+	ctx := context.Background()
+	s.refreshCodexPlanProxyAuths(ctx)
 	var auths []*coreauth.Auth
 	if s.coreManager != nil {
 		auths = s.coreManager.List()
@@ -1196,7 +1297,6 @@ func (s *Service) applyConfigUpdate(newCfg *config.Config) {
 		forceReplaceAuths: true,
 		auths:             auths,
 	})
-	ctx := context.Background()
 	s.registerConfigAPIKeyAuths(ctx, newCfg)
 	s.syncPluginRuntime(ctx)
 }
